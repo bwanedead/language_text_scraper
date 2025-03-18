@@ -6,6 +6,8 @@ import re
 import pathlib
 from urllib.parse import urlparse
 import logging
+import time
+from twisted.internet import reactor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,12 +40,12 @@ class TextSpider(scrapy.Spider):
                     self.callback(urls=len(self.seen_urls), files=len(self.files_by_seed.get(self.current_seed, [])),
                                   target_200=self.target_200_plus_count)
 
-        for href in response.css("a[href]::attr(href)").getall():
+        for href in response.css("a::attr(href), link::attr(href), [data-href]::attr(data-href)").getall():
             if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
                 if not href.startswith(('http://', 'https://')):
                     href = response.urljoin(href)
                 self.seen_urls.add(href)
-                yield scrapy.Request(href, callback=self.parse)
+                yield scrapy.Request(href, callback=self.parse, dont_filter=True)
                 if self.callback:
                     self.callback(urls=len(self.seen_urls), files=len(self.files_by_seed.get(self.current_seed, [])),
                                   target_200=self.target_200_plus_count)
@@ -100,27 +102,6 @@ class TextSpider(scrapy.Spider):
         return None
 
 def scrape_all(seed_url, callback=None, max_seeds=10):
-    class SeedSpider(scrapy.Spider):
-        name = "seed_spider"
-        start_urls = [seed_url]
-        seeds = []
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.max_seeds = max_seeds
-
-        def parse(self, response):
-            for href in response.css("a[href]::attr(href)").getall():
-                if len(self.seeds) < self.max_seeds and href not in self.seeds:
-                    self.seeds.append(href)
-                    if callback:
-                        callback(seeds=len(self.seeds))
-            for next_page in response.css("a[href]::attr(href)").getall():
-                if len(self.seeds) < self.max_seeds:
-                    if not next_page.startswith(('http://', 'https://')):
-                        next_page = response.urljoin(next_page)
-                    yield scrapy.Request(next_page, callback=self.parse)
-
     process = CrawlerProcess(settings={
         "LOG_LEVEL": "INFO",
         "DOWNLOAD_DELAY": 1,
@@ -128,14 +109,12 @@ def scrape_all(seed_url, callback=None, max_seeds=10):
         "RETRY_TIMES": 2,
         "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
     })
-    process.crawl(SeedSpider)
-    process.start()
-    seeds = SeedSpider.seeds
-    logger.info(f"Collected seeds: {seeds}")
-    if seeds:
-        for url in seeds:
-            process.crawl(TextSpider, start_urls=[url], callback=callback)
-        process.start()
+    deferred = process.crawl(SeedSpider, start_urls=[seed_url], max_seeds=max_seeds, callback=callback)
+    deferred.addBoth(lambda _: [
+        process.crawl(TextSpider, start_urls=[url], callback=callback) 
+        for url in SeedSpider.seeds if SeedSpider.seeds
+    ])
+    process.start()  # Start the reactor once after queuing all spiders
 
 with open(".gitignore", "a") as f:
     path = r"C:\Users\dawki\OneDrive\Documents\random_projects\corpora_archive\language_sorted_corpora"
