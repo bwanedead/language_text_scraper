@@ -9,8 +9,7 @@ from urllib.parse import urlparse
 class TextSpider(scrapy.Spider):
     name = "text_spider"
     max_files_per_seed_target = 100  # Target 100 files with 200+ words
-    max_total_files = 500  # Global cap
-    total_file_count = 0
+    max_files_per_seed = 500  # Cap at 500 files per seed
     target_200_plus_count = 0
 
     def __init__(self, start_urls=None, callback=None, *args, **kwargs):
@@ -20,7 +19,7 @@ class TextSpider(scrapy.Spider):
         self.callback = callback
         self.base_path = r"C:\Users\dawki\OneDrive\Documents\random_projects\corpora_archive\language_sorted_corpora"
         self.current_seed = None
-        self.files_by_seed = {}  # Track file numbers per seed
+        self.files_by_seed = {}
 
     def parse(self, response):
         text = " ".join(response.css("p::text").getall()).strip()
@@ -32,41 +31,38 @@ class TextSpider(scrapy.Spider):
                 self.save_or_replace_text(text, lang, seed_key, word_count, response.url)
                 if self.callback:
                     self.callback(urls=len(self.seen_urls), files=len(self.files_by_seed.get(self.current_seed, [])),
-                                  total=self.total_file_count, target_200=self.target_200_plus_count)
+                                  target_200=self.target_200_plus_count)
 
         for href in response.css("a[href]::attr(href)").getall():
-            if href not in self.seen_urls and self.total_file_count < self.max_total_files:
+            if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
                 self.seen_urls.add(href)
                 yield scrapy.Request(href, callback=self.parse)
                 if self.callback:
                     self.callback(urls=len(self.seen_urls), files=len(self.files_by_seed.get(self.current_seed, [])),
-                                  total=self.total_file_count, target_200=self.target_200_plus_count)
+                                  target_200=self.target_200_plus_count)
 
     def save_or_replace_text(self, text, lang, seed_key, word_count, url):
         lang_dir = os.path.join(self.base_path, lang)
         os.makedirs(lang_dir, exist_ok=True)
 
-        lang_files = [f for f in os.listdir(lang_dir) if f.startswith("text_") and f.endswith(".txt")]
+        lang_files = [f for f in os.listdir(lang_dir) if f.startswith(f"text_{seed_key}_") and f.endswith(".txt")]
         max_num = max([int(f.split("_")[-1].split(".")[0]) for f in lang_files] or [0]) if lang_files else 0
         file_num = max_num + 1
 
         current_seed_files = self.files_by_seed.get(self.current_seed, [])
         if word_count >= 200:
             self.target_200_plus_count += 1
-            if self.target_200_plus_count <= self.max_files_per_seed_target or len(current_seed_files) < self.max_files_per_seed_target:
+            if len(current_seed_files) < self.max_files_per_seed:
                 self.save_text(text, lang, seed_key, file_num, url, word_count)
                 current_seed_files.append(file_num)
-            elif self.total_file_count < self.max_total_files:
-                self.save_text(text, lang, seed_key, file_num, url, word_count)
-                current_seed_files.append(file_num)
-            elif len(current_seed_files) > 0:
+            elif len(current_seed_files) >= self.max_files_per_seed and self.target_200_plus_count <= self.max_files_per_seed_target:
                 to_replace = min(current_seed_files, key=lambda x: self.get_word_count(lang_dir, seed_key, x, url) if self.get_word_count(lang_dir, seed_key, x, url) else 2000)
                 if self.get_word_count(lang_dir, seed_key, to_replace, url) < 200:
                     self.delete_text(lang_dir, seed_key, to_replace, url)
                     current_seed_files.remove(to_replace)
                     self.save_text(text, lang, seed_key, file_num, url, word_count)
                     current_seed_files.append(file_num)
-        elif word_count >= 50 and self.total_file_count < self.max_total_files:
+        elif word_count >= 50 and len(current_seed_files) < self.max_files_per_seed and self.target_200_plus_count < self.max_files_per_seed_target:
             self.save_text(text, lang, seed_key, file_num, url, word_count)
             current_seed_files.append(file_num)
 
@@ -78,7 +74,6 @@ class TextSpider(scrapy.Spider):
         lang_file = os.path.join(self.base_path, lang, filename)
         with open(lang_file, "w", encoding="utf-8") as f:
             f.write(text)
-        self.total_file_count += 1
         if self.callback:
             self.callback(lang=lang, filename=filename, word_count=word_count)
 
@@ -87,7 +82,6 @@ class TextSpider(scrapy.Spider):
         lang_file = os.path.join(lang_dir, f"text_{seed_key}_{url_basename}_{file_num}.txt")
         if os.path.exists(lang_file):
             os.remove(lang_file)
-        self.total_file_count -= 1
 
     def get_word_count(self, dir_path, seed_key, file_num, url):
         url_basename = re.sub(r"[^\w]", "_", os.path.basename(urlparse(url).path) or urlparse(url).netloc)
@@ -98,7 +92,6 @@ class TextSpider(scrapy.Spider):
         return None
 
 def run_scraper(start_urls, callback=None):
-    total_files = 0  # Track across all seeds in this run
     for url in start_urls:
         spider = TextSpider(start_urls=[url], callback=callback)
         spider.current_seed = url
@@ -108,10 +101,8 @@ def run_scraper(start_urls, callback=None):
         })
         process.crawl(spider)
         process.start()
-        total_files += spider.total_file_count
-        if spider.target_200_plus_count >= spider.max_files_per_seed_target or total_files >= spider.max_total_files:
-            continue  # Move to next seed if target met or global cap reached
-    return total_files  # Optional, for debugging
+        if spider.target_200_plus_count >= spider.max_files_per_seed_target:
+            continue
 
 def run_seed_finder(seed_url, callback=None, max_seeds=10):
     class SeedSpider(scrapy.Spider):
@@ -121,7 +112,7 @@ def run_seed_finder(seed_url, callback=None, max_seeds=10):
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.max_seeds = max_seeds  # Use passed value
+            self.max_seeds = max_seeds
 
         def parse(self, response):
             for href in response.css("a[href]::attr(href)").getall():

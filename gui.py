@@ -5,7 +5,7 @@ import os
 
 def scrape_from_url(url_list):
     urls = url_list.get("1.0", tk.END).strip().split("\n")
-    if urls and urls[0]:  # Check if list isn't empty
+    if urls and urls[0]:
         status_label.config(text="Scraping... Seeds: 0 | URLs: 0 | Files: 0")
         run_scraper(urls, update_status)
         status_label.config(text="Done! Check language_sorted_corpora/ folder")
@@ -20,7 +20,7 @@ def find_seeds_and_scrape(seed_list):
         except ValueError:
             seed_count = 10  # Default to 10 if invalid
         status_label.config(text="Finding seeds... Seeds: 0 | URLs: 0 | Files: 0")
-        run_seed_finder(seeds[0], update_status, seed_count)  # Pass seed_count
+        run_seed_finder(seeds[0], update_status, seed_count)
         status_label.config(text="Done! Check language_sorted_corpora/ folder")
 
 def update_status(seeds=0, urls=0, files=0, total=0, target_200=0, lang=None, filename=None, word_count=None):
@@ -46,7 +46,7 @@ def update_directory_view():
 def add_url(entry, listbox):
     url = entry.get().strip()
     if url:
-        listbox.insert(tk.END, url)  # Let ScrolledText handle newlines
+        listbox.insert(tk.END, url)
         entry.delete(0, tk.END)
 
 def create_gui():
@@ -54,7 +54,6 @@ def create_gui():
     root.title("Language Text Scraper")
     root.geometry("600x600")
 
-    # Scrape URLs section
     tk.Label(root, text="URLs to Scrape From (e.g., https://substack.com/@astralcodxten):").pack(pady=5)
     url_entry = tk.Entry(root, width=50)
     url_entry.pack(pady=5)
@@ -63,14 +62,13 @@ def create_gui():
     tk.Button(root, text="Add URL", command=lambda: add_url(url_entry, url_list)).pack(pady=5)
     tk.Button(root, text="Scrape", command=lambda: scrape_from_url(url_list)).pack(pady=5)
 
-    # Seed Finder section
     seed_frame = tk.Frame(root)
     seed_frame.pack(pady=5)
     tk.Label(seed_frame, text="Seed Finder URLs (e.g., https://www.google.com/search?q=substack+writers):").pack(side=tk.LEFT, padx=(0, 5))
     tk.Label(seed_frame, text="Seed Count:").pack(side=tk.LEFT)
     global seed_count_entry
     seed_count_entry = tk.Entry(seed_frame, width=5)
-    seed_count_entry.insert(0, "10")  # Default value
+    seed_count_entry.insert(0, "10")
     seed_count_entry.pack(side=tk.LEFT, padx=5)
     seed_entry = tk.Entry(seed_frame, width=40)
     seed_entry.pack(side=tk.LEFT, pady=5)
@@ -87,12 +85,11 @@ def create_gui():
     scrollbar.pack(side="right", fill="y")
     tree.configure(yscrollcommand=scrollbar.set)
 
-    # Status bar
     global status_label
     status_label = tk.Label(root, text="Ready", anchor="w")
     status_label.pack(fill="x", pady=5)
 
     global word_counts
-    word_counts = {}  # Dictionary to store word counts by language and file
+    word_counts = {}
 
     root.mainloop()
