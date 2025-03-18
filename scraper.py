@@ -5,6 +5,11 @@ from langdetect import detect
 import re
 import pathlib
 from urllib.parse import urlparse
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class TextSpider(scrapy.Spider):
     name = "text_spider"
@@ -35,7 +40,6 @@ class TextSpider(scrapy.Spider):
 
         for href in response.css("a[href]::attr(href)").getall():
             if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
-                # Ensure URL has a scheme, convert relative to absolute if needed
                 if not href.startswith(('http://', 'https://')):
                     href = response.urljoin(href)
                 self.seen_urls.add(href)
@@ -75,6 +79,7 @@ class TextSpider(scrapy.Spider):
         url_basename = re.sub(r"[^\w]", "_", os.path.basename(urlparse(url).path) or urlparse(url).netloc)
         filename = f"text_{seed_key}_{url_basename}_{file_num}.txt"
         lang_file = os.path.join(self.base_path, lang, filename)
+        logger.info(f"Saving file: {lang_file}")
         with open(lang_file, "w", encoding="utf-8") as f:
             f.write(text)
         if self.callback:
@@ -94,19 +99,7 @@ class TextSpider(scrapy.Spider):
                 return len(f.read().split())
         return None
 
-def run_scraper(start_urls, callback=None):
-    process = CrawlerProcess(settings={
-        "LOG_LEVEL": "INFO",
-        "DOWNLOAD_DELAY": 1,
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "RETRY_TIMES": 2,  # Retry on 403 or other failures
-        "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
-    })
-    for url in start_urls:
-        process.crawl(TextSpider, start_urls=[url], callback=callback)
-    process.start()
-
-def run_seed_finder(seed_url, callback=None, max_seeds=10):
+def scrape_all(seed_url, callback=None, max_seeds=10):
     class SeedSpider(scrapy.Spider):
         name = "seed_spider"
         start_urls = [seed_url]
@@ -124,18 +117,25 @@ def run_seed_finder(seed_url, callback=None, max_seeds=10):
                         callback(seeds=len(self.seeds))
             for next_page in response.css("a[href]::attr(href)").getall():
                 if len(self.seeds) < self.max_seeds:
+                    if not next_page.startswith(('http://', 'https://')):
+                        next_page = response.urljoin(next_page)
                     yield scrapy.Request(next_page, callback=self.parse)
 
     process = CrawlerProcess(settings={
         "LOG_LEVEL": "INFO",
+        "DOWNLOAD_DELAY": 1,
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "RETRY_TIMES": 2,
         "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
     })
     process.crawl(SeedSpider)
     process.start()
-    if SeedSpider.seeds:
-        run_scraper(SeedSpider.seeds, callback)
+    seeds = SeedSpider.seeds
+    logger.info(f"Collected seeds: {seeds}")
+    if seeds:
+        for url in seeds:
+            process.crawl(TextSpider, start_urls=[url], callback=callback)
+        process.start()
 
 with open(".gitignore", "a") as f:
     path = r"C:\Users\dawki\OneDrive\Documents\random_projects\corpora_archive\language_sorted_corpora"
