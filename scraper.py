@@ -23,24 +23,51 @@ class SeedSpider(scrapy.Spider):
         self.max_seeds = max_seeds
         self.callback = callback
         SeedSpider.seeds = []  # Reset class variable on initialization
+        self.seen_urls = set()  # Track URLs we've already seen
 
     def parse(self, response):
         logger.info(f"Processing URL: {response.url}")
         # Broader selector with delay for dynamic content
         time.sleep(1)  # Allow page to load
-        for href in response.css("a::attr(href), link::attr(href), [data-href]::attr(data-href)").getall():
-            if len(self.seeds) < self.max_seeds and href not in self.seeds:
+        
+        # Extract all links from the page with broader selectors
+        links = set()
+        for selector in ["a::attr(href)", "link::attr(href)", "[data-href]::attr(data-href)", 
+                         "[src]::attr(src)", "iframe::attr(src)"]:
+            for href in response.css(selector).getall():
+                if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                    links.add(href)
+        
+        # Process extracted links
+        for href in links:
+            if len(SeedSpider.seeds) < self.max_seeds and href not in self.seen_urls:
                 if not href.startswith(('http://', 'https://')):
                     href = response.urljoin(href)
-                self.seeds.append(href)
-                logger.info(f"Added seed: {href}")
-                if self.callback:
-                    self.callback(seeds=len(self.seeds))
-        for next_page in response.css("a::attr(href), link::attr(href), [data-href]::attr(data-href)").getall():
-            if len(self.seeds) < self.max_seeds:
+                
+                # Basic URL validation
+                if href.startswith(('http://', 'https://')) and len(href) < 500:
+                    SeedSpider.seeds.append(href)
+                    self.seen_urls.add(href)
+                    logger.info(f"Added seed: {href}")
+                    if self.callback:
+                        self.callback(seeds=len(SeedSpider.seeds))
+        
+        # Continue crawling even if we got some seeds already
+        for next_page in response.css("a::attr(href)").getall():
+            if len(SeedSpider.seeds) < self.max_seeds:
                 if not next_page.startswith(('http://', 'https://')):
                     next_page = response.urljoin(next_page)
-                yield scrapy.Request(next_page, callback=self.parse, dont_filter=True)
+                
+                # Only follow links we haven't seen yet
+                if next_page not in self.seen_urls and next_page.startswith(('http://', 'https://')):
+                    self.seen_urls.add(next_page)
+                    yield scrapy.Request(next_page, callback=self.parse, dont_filter=True, 
+                                        errback=self.handle_error)
+    
+    def handle_error(self, failure):
+        # Log errors but continue crawling
+        logger.warning(f"Request failed: {failure.request.url}, {str(failure.value)}")
+        return None  # Continue with other requests
 
 class TextSpider(scrapy.Spider):
     name = "text_spider"
@@ -54,30 +81,58 @@ class TextSpider(scrapy.Spider):
         self.seen_urls = set()
         self.callback = callback
         self.base_path = r"C:\Users\dawki\OneDrive\Documents\random_projects\corpora_archive\language_sorted_corpora"
-        self.current_seed = None
+        
+        # Set current_seed based on start_urls
+        self.current_seed = self.start_urls[0] if self.start_urls else None
+        logger.info(f"TextSpider initialized with seed: {self.current_seed}")
+        
         self.files_by_seed = {}
+        # Ensure the output directory exists
+        os.makedirs(self.base_path, exist_ok=True)
 
     def parse(self, response):
-        text = " ".join(response.css("p::text").getall()).strip()
-        word_count = len(text.split()) if text else 0
-        if word_count >= 50 and word_count <= 2000:
-            if text:
-                lang = detect(text[:500])
-                seed_key = re.sub(r"[^\w]", "_", self.current_seed)
-                self.save_or_replace_text(text, lang, seed_key, word_count, response.url)
-                if self.callback:
-                    self.callback(urls=len(self.seen_urls), files=len(self.files_by_seed.get(self.current_seed, [])),
-                                  target_200=self.target_200_plus_count)
-
-        for href in response.css("a::attr(href), link::attr(href), [data-href]::attr(data-href)").getall():
-            if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
-                if not href.startswith(('http://', 'https://')):
-                    href = response.urljoin(href)
-                self.seen_urls.add(href)
-                yield scrapy.Request(href, callback=self.parse, dont_filter=True)
-                if self.callback:
-                    self.callback(urls=len(self.seen_urls), files=len(self.files_by_seed.get(self.current_seed, [])),
-                                  target_200=self.target_200_plus_count)
+        logger.info(f"TextSpider processing: {response.url}")
+        try:
+            text = " ".join(response.css("p::text, article::text, .content::text, div::text").getall()).strip()
+            word_count = len(text.split()) if text else 0
+            
+            if word_count >= 50 and word_count <= 2000:
+                if text:
+                    try:
+                        lang = detect(text[:500])
+                        seed_key = re.sub(r"[^\w]", "_", self.current_seed)
+                        self.save_or_replace_text(text, lang, seed_key, word_count, response.url)
+                        logger.info(f"Extracted text ({word_count} words) in {lang} from {response.url}")
+                        
+                        if self.callback:
+                            self.callback(urls=len(self.seen_urls), 
+                                          files=len(self.files_by_seed.get(self.current_seed, [])),
+                                          target_200=self.target_200_plus_count)
+                    except Exception as e:
+                        logger.error(f"Error saving text: {str(e)}")
+            
+            # Extract and follow links
+            for href in response.css("a::attr(href)").getall():
+                if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
+                    if not href.startswith(('http://', 'https://')):
+                        href = response.urljoin(href)
+                    
+                    if href.startswith(('http://', 'https://')) and len(href) < 500:
+                        self.seen_urls.add(href)
+                        yield scrapy.Request(href, callback=self.parse, 
+                                            errback=self.handle_error,
+                                            dont_filter=True)
+                        
+                        if self.callback:
+                            self.callback(urls=len(self.seen_urls), 
+                                         files=len(self.files_by_seed.get(self.current_seed, [])),
+                                         target_200=self.target_200_plus_count)
+        except Exception as e:
+            logger.error(f"Error processing {response.url}: {str(e)}")
+    
+    def handle_error(self, failure):
+        logger.warning(f"Request failed: {failure.request.url}, {str(failure.value)}")
+        return None  # Continue with other requests
 
     def save_or_replace_text(self, text, lang, seed_key, word_count, url):
         lang_dir = os.path.join(self.base_path, lang)
@@ -131,48 +186,94 @@ class TextSpider(scrapy.Spider):
         return None
 
 def scrape_all(seed_url, callback=None, max_seeds=10):
+    """Find seeds from a URL and then scrape content from those seeds"""
+    logger.info(f"Starting seed collection from: {seed_url}")
+    
+    # Create crawler process with settings
     process = CrawlerProcess(settings={
         "LOG_LEVEL": "INFO",
         "DOWNLOAD_DELAY": 1,
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "RETRY_TIMES": 2,
         "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
+        "DOWNLOAD_TIMEOUT": 30,  # 30 seconds timeout
+        "ROBOTSTXT_OBEY": False,  # Don't obey robots.txt for better results
     })
+    
+    # Start crawling with SeedSpider
     deferred = process.crawl(SeedSpider, start_urls=[seed_url], max_seeds=max_seeds, callback=callback)
-    deferred.addBoth(lambda _: [
-        process.crawl(TextSpider, start_urls=[url], callback=callback) 
-        for url in SeedSpider.seeds if SeedSpider.seeds
-    ])
-    process.start()  # Start the reactor once after queuing all spiders
+    
+    # After SeedSpider finishes, start TextSpider for each collected seed
+    def after_seed_spider(_):
+        logger.info(f"Seed collection finished. Found {len(SeedSpider.seeds)} seeds.")
+        if callback:
+            callback(seeds=len(SeedSpider.seeds))
+        
+        # If no seeds found, use the original URL as a seed
+        if not SeedSpider.seeds:
+            logger.warning("No seeds found, using original URL as seed")
+            SeedSpider.seeds = [seed_url]
+            if callback:
+                callback(seeds=1)
+        
+        # Start TextSpider for each seed
+        for url in SeedSpider.seeds:
+            logger.info(f"Starting content spider for seed: {url}")
+            TextSpider.target_200_plus_count = 0  # Reset counter for each seed
+            spider = TextSpider(start_urls=[url], callback=callback)
+            spider.current_seed = url
+            process.crawl(spider)
+    
+    deferred.addBoth(after_seed_spider)
+    
+    # Start the reactor only once
+    process.start()
+    logger.info("Scraping completed")
 
 # Wrapper functions for GUI integration
 def run_scraper(urls, callback=None):
     """Function called by GUI to directly scrape from provided URLs"""
+    logger.info(f"Starting direct scraping of {len(urls)} URLs")
+    
+    # Create crawler process with settings
     process = CrawlerProcess(settings={
         "LOG_LEVEL": "INFO",
         "DOWNLOAD_DELAY": 1,
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "RETRY_TIMES": 2,
         "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
+        "DOWNLOAD_TIMEOUT": 30,
+        "ROBOTSTXT_OBEY": False,
     })
     
     # Add each URL as a TextSpider crawl job
     for url in urls:
         if url.strip():
+            logger.info(f"Setting up spider for URL: {url.strip()}")
             TextSpider.target_200_plus_count = 0  # Reset counter for each seed
             spider = TextSpider(start_urls=[url.strip()], callback=callback)
             spider.current_seed = url.strip()
             process.crawl(spider)
     
+    # Start the reactor
     process.start()
+    logger.info("Direct scraping completed")
 
 def run_seed_finder(seed_url, callback=None, max_seeds=10):
     """Function called by GUI to find seeds and then scrape from them"""
     if seed_url.strip():
+        logger.info(f"Starting seed finder for URL: {seed_url.strip()} with max seeds: {max_seeds}")
         scrape_all(seed_url.strip(), callback, max_seeds)
+    else:
+        logger.error("Empty seed URL provided")
 
-with open(".gitignore", "a") as f:
-    path = r"C:\Users\dawki\OneDrive\Documents\random_projects\corpora_archive\language_sorted_corpora"
-    gitignore_content = open(".gitignore").read()
-    if path not in gitignore_content:
-        f.write(f"\n{path}/")
+# Handle gitignore file
+try:
+    with open(".gitignore", "a+") as f:
+        path = r"C:\Users\dawki\OneDrive\Documents\random_projects\corpora_archive\language_sorted_corpora"
+        f.seek(0)
+        gitignore_content = f.read()
+        if path not in gitignore_content:
+            f.write(f"\n{path}/")
+except Exception as e:
+    logger.warning(f"Could not update .gitignore: {str(e)}")
