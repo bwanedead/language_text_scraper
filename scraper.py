@@ -54,30 +54,33 @@ class TextSpider(scrapy.Spider):
         if word_count >= 200:
             self.target_200_plus_count += 1
             if self.target_200_plus_count <= self.max_files_per_seed_target or len(current_seed_files) < self.max_files_per_seed_target:
-                self.save_text(text, lang, seed_key, file_num, url)
+                self.save_text(text, lang, seed_key, file_num, url, word_count)
                 current_seed_files.append(file_num)
             elif self.total_file_count < self.max_total_files:
-                self.save_text(text, lang, seed_key, file_num, url)
+                self.save_text(text, lang, seed_key, file_num, url, word_count)
                 current_seed_files.append(file_num)
             elif len(current_seed_files) > 0:
                 to_replace = min(current_seed_files, key=lambda x: self.get_word_count(lang_dir, seed_key, x, url) if self.get_word_count(lang_dir, seed_key, x, url) else 2000)
                 if self.get_word_count(lang_dir, seed_key, to_replace, url) < 200:
                     self.delete_text(lang_dir, seed_key, to_replace, url)
                     current_seed_files.remove(to_replace)
-                    self.save_text(text, lang, seed_key, file_num, url)
+                    self.save_text(text, lang, seed_key, file_num, url, word_count)
                     current_seed_files.append(file_num)
         elif word_count >= 50 and self.total_file_count < self.max_total_files:
-            self.save_text(text, lang, seed_key, file_num, url)
+            self.save_text(text, lang, seed_key, file_num, url, word_count)
             current_seed_files.append(file_num)
 
         self.files_by_seed[self.current_seed] = current_seed_files
 
-    def save_text(self, text, lang, seed_key, file_num, url):
+    def save_text(self, text, lang, seed_key, file_num, url, word_count):
         url_basename = re.sub(r"[^\w]", "_", os.path.basename(urlparse(url).path) or urlparse(url).netloc)
-        lang_file = os.path.join(self.base_path, lang, f"text_{seed_key}_{url_basename}_{file_num}.txt")
+        filename = f"text_{seed_key}_{url_basename}_{file_num}.txt"
+        lang_file = os.path.join(self.base_path, lang, filename)
         with open(lang_file, "w", encoding="utf-8") as f:
             f.write(text)
         self.total_file_count += 1
+        if self.callback:
+            self.callback(lang=lang, filename=filename, word_count=word_count)
 
     def delete_text(self, lang_dir, seed_key, file_num, url):
         url_basename = re.sub(r"[^\w]", "_", os.path.basename(urlparse(url).path) or urlparse(url).netloc)

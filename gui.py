@@ -23,8 +23,12 @@ def find_seeds_and_scrape(seed_list):
         run_seed_finder(seeds[0], update_status, seed_count)  # Pass seed_count
         status_label.config(text="Done! Check language_sorted_corpora/ folder")
 
-def update_status(seeds=0, urls=0, files=0, total=0, target_200=0):
+def update_status(seeds=0, urls=0, files=0, total=0, target_200=0, lang=None, filename=None, word_count=None):
     status_label.config(text=f"Progress: Seeds: {seeds} | URLs: {urls} | Seed Files: {files} | Total Files: {total} | 200+ Words: {target_200}")
+    if lang and filename and word_count is not None:
+        if lang not in word_counts:
+            word_counts[lang] = {}
+        word_counts[lang][filename] = word_count
     update_directory_view()
 
 def update_directory_view():
@@ -32,10 +36,12 @@ def update_directory_view():
     tree.delete(*tree.get_children())
     for lang in os.listdir(base_path):
         if os.path.isdir(os.path.join(base_path, lang)):
-            lang_node = tree.insert("", "end", text=lang, open=True)
+            total_words = sum(word_counts.get(lang, {}).values()) if lang in word_counts else 0
+            lang_node = tree.insert("", "end", text=f"{lang} ({total_words} words)", open=True)
             for file in os.listdir(os.path.join(base_path, lang)):
                 if file.endswith(".txt"):
-                    tree.insert(lang_node, "end", text=file)
+                    file_word_count = word_counts.get(lang, {}).get(file, 0)
+                    tree.insert(lang_node, "end", text=f"{file} ({file_word_count} words)")
 
 def add_url(entry, listbox):
     url = entry.get().strip()
@@ -85,5 +91,8 @@ def create_gui():
     global status_label
     status_label = tk.Label(root, text="Ready", anchor="w")
     status_label.pack(fill="x", pady=5)
+
+    global word_counts
+    word_counts = {}  # Dictionary to store word counts by language and file
 
     root.mainloop()
