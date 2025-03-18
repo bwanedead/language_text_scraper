@@ -35,6 +35,9 @@ class TextSpider(scrapy.Spider):
 
         for href in response.css("a[href]::attr(href)").getall():
             if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
+                # Ensure URL has a scheme, skip if invalid
+                if not href.startswith(('http://', 'https://')):
+                    continue
                 self.seen_urls.add(href)
                 yield scrapy.Request(href, callback=self.parse)
                 if self.callback:
@@ -92,17 +95,13 @@ class TextSpider(scrapy.Spider):
         return None
 
 def run_scraper(start_urls, callback=None):
+    process = CrawlerProcess(settings={
+        "LOG_LEVEL": "INFO",
+        "DOWNLOAD_DELAY": 1,
+    })
     for url in start_urls:
-        spider = TextSpider(start_urls=[url], callback=callback)
-        spider.current_seed = url
-        process = CrawlerProcess(settings={
-            "LOG_LEVEL": "INFO",
-            "DOWNLOAD_DELAY": 1,
-        })
-        process.crawl(spider)
-        process.start()
-        if spider.target_200_plus_count >= spider.max_files_per_seed_target:
-            continue
+        process.crawl(TextSpider, start_urls=[url], callback=callback)
+    process.start()  # Start once after all spiders are added
 
 def run_seed_finder(seed_url, callback=None, max_seeds=10):
     class SeedSpider(scrapy.Spider):
