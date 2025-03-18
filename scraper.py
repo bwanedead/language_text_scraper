@@ -35,9 +35,9 @@ class TextSpider(scrapy.Spider):
 
         for href in response.css("a[href]::attr(href)").getall():
             if href not in self.seen_urls and self.target_200_plus_count < self.max_files_per_seed_target:
-                # Ensure URL has a scheme, skip if invalid
+                # Ensure URL has a scheme, convert relative to absolute if needed
                 if not href.startswith(('http://', 'https://')):
-                    continue
+                    href = response.urljoin(href)
                 self.seen_urls.add(href)
                 yield scrapy.Request(href, callback=self.parse)
                 if self.callback:
@@ -98,10 +98,13 @@ def run_scraper(start_urls, callback=None):
     process = CrawlerProcess(settings={
         "LOG_LEVEL": "INFO",
         "DOWNLOAD_DELAY": 1,
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "RETRY_TIMES": 2,  # Retry on 403 or other failures
+        "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
     })
     for url in start_urls:
         process.crawl(TextSpider, start_urls=[url], callback=callback)
-    process.start()  # Start once after all spiders are added
+    process.start()
 
 def run_seed_finder(seed_url, callback=None, max_seeds=10):
     class SeedSpider(scrapy.Spider):
@@ -123,7 +126,12 @@ def run_seed_finder(seed_url, callback=None, max_seeds=10):
                 if len(self.seeds) < self.max_seeds:
                     yield scrapy.Request(next_page, callback=self.parse)
 
-    process = CrawlerProcess(settings={"LOG_LEVEL": "INFO"})
+    process = CrawlerProcess(settings={
+        "LOG_LEVEL": "INFO",
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "RETRY_TIMES": 2,
+        "RETRY_HTTP_CODES": [403, 500, 502, 503, 504],
+    })
     process.crawl(SeedSpider)
     process.start()
     if SeedSpider.seeds:
